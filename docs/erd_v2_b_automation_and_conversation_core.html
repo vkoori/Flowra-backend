@@ -1,0 +1,134 @@
+<style>
+#erdB svg.erDiagram .divider path { stroke-opacity: 0.5; }
+#erdB svg.erDiagram .row-rect-odd path,
+#erdB svg.erDiagram .row-rect-odd rect,
+#erdB svg.erDiagram .row-rect-even path,
+#erdB svg.erDiagram .row-rect-even rect { stroke: none !important; }
+</style>
+<div id="erdB"></div>
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"anthropic-sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '13px',
+    fontFamily: '"anthropic-sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+  },
+});
+const { svg } = await mermaid.render('erdB-svg', `erDiagram
+  SOCIAL_ACCOUNTS ||--o{ RULES : configures
+  ACCOUNT_TENURES ||--o{ INBOUND_EVENTS : scopes
+  ACCOUNT_TENURES ||--o{ CONVERSATIONS : scopes
+  INBOUND_EVENTS ||--o{ EXECUTIONS : causes
+  INBOUND_EVENTS ||--o| MODERATION_DECISIONS : judged_by
+  CONVERSATIONS ||--o{ MESSAGES : contains
+  CONVERSATIONS ||--o| INBOUND_EVENTS : threads
+  SOCIAL_ACCOUNTS {
+    uuid id PK
+    string platform
+  }
+  ACCOUNT_TENURES {
+    uuid id PK
+    uuid social_account_id FK
+    uuid user_id FK
+  }
+  RULES {
+    uuid id PK
+    uuid social_account_id FK
+    string name
+    string trigger_type
+    jsonb trigger_scope
+    jsonb matcher
+    jsonb conditions
+    jsonb actions
+    int priority
+    bool enabled
+  }
+  INBOUND_EVENTS {
+    uuid id PK
+    uuid tenure_id FK
+    uuid conversation_id FK
+    string type
+    string external_id
+    string dedupe_key UK
+    string author_external_id
+    string author_ref_hash
+    text raw_text
+    text normalized_text
+    int normalizer_version
+    timestamp occurred_at
+    timestamp purge_at
+  }
+  EXECUTIONS {
+    uuid id PK
+    string origin_type
+    uuid origin_id
+    uuid event_id FK
+    int action_index
+    string action_type
+    jsonb params
+    string status
+    int attempts
+    timestamp scheduled_at
+    timestamp next_attempt_at
+    text last_error
+  }
+  MODERATION_DECISIONS {
+    uuid id PK
+    uuid event_id FK
+    string verdict
+    float score
+    jsonb reasons
+    string state
+    uuid decided_by FK
+    timestamp decided_at
+  }
+  CONVERSATIONS {
+    uuid id PK
+    uuid tenure_id FK
+    string participant_hash
+    string participant_external_id
+    string status
+    timestamp last_inbound_at
+    timestamp window_expires_at
+  }
+  MESSAGES {
+    uuid id PK
+    uuid conversation_id FK
+    string direction
+    text body
+    string external_id
+    timestamp sent_at
+    timestamp purge_at
+  }`);
+document.getElementById('erdB').innerHTML = svg;
+document.querySelectorAll('#erdB svg.erDiagram .node').forEach(node => {
+  const firstPath = node.querySelector('path[d]');
+  if (!firstPath) return;
+  const d = firstPath.getAttribute('d');
+  const nums = d.match(/-?[\d.]+/g)?.map(Number);
+  if (!nums || nums.length < 8) return;
+  const xs = [nums[0], nums[2], nums[4], nums[6]];
+  const ys = [nums[1], nums[3], nums[5], nums[7]];
+  const x = Math.min(...xs), y = Math.min(...ys);
+  const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', x); rect.setAttribute('y', y);
+  rect.setAttribute('width', w); rect.setAttribute('height', h);
+  rect.setAttribute('rx', '8');
+  for (const a of ['fill', 'stroke', 'stroke-width', 'class', 'style']) {
+    if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+  }
+  firstPath.replaceWith(rect);
+});
+document.querySelectorAll('#erdB svg.erDiagram .row-rect-odd path, #erdB svg.erDiagram .row-rect-even path').forEach(p => {
+  p.setAttribute('stroke', 'none');
+});
+</script>

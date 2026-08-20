@@ -1,0 +1,94 @@
+# Codex CLI exec-policy rules for this repository.
+#
+# Only takes effect once this project is marked TRUSTED in Codex (AGENTS.md §6.1) — an
+# untrusted run ignores this file entirely and falls back to Codex's own defaults.
+#
+# These mirror the destructive/risky subset of the Claude Code side's
+# .claude/settings.json permissions.deny / permissions.ask lists (see .codex/README.md
+# for the full mapping). Deliberately NOT allow-listing benign read/build commands here
+# (git status/diff/log, npm/npx test/build/prisma-generate, node/bash script
+# invocations under .agents/skills/): Codex's own exec-policy heuristics plus
+# workspace-write sandboxing already permit those without a prompt. These rules exist
+# only to override that default for the commands below, where the default would
+# otherwise be too permissive for what this repository considers safe.
+#
+# Validate changes to this file with:
+#   codex execpolicy check --pretty --rules .codex/rules/bash-permissions.rules -- <command>
+
+# --- Forbidden: irreversible or blast-radius-beyond-this-repo operations -------------
+
+prefix_rule(
+    pattern = ["rm", "-rf"],
+    decision = "forbidden",
+    justification = "Irreversible recursive delete — never auto-approved in this repo.",
+)
+
+prefix_rule(
+    pattern = ["git", "push", "--force"],
+    decision = "forbidden",
+    justification = "Force-push can overwrite remote history or someone else's work.",
+)
+
+prefix_rule(
+    pattern = ["git", "push", "-f"],
+    decision = "forbidden",
+    justification = "Short form of --force — same risk as above.",
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "forbidden",
+    justification = "Discards uncommitted work irreversibly.",
+)
+
+prefix_rule(
+    pattern = ["npx", "prisma", "migrate", "reset"],
+    decision = "forbidden",
+    justification = "Drops and recreates the database — never appropriate for an agent to run unattended.",
+)
+
+prefix_rule(
+    pattern = ["docker", "system", "prune"],
+    decision = "forbidden",
+    justification = "Removes containers/images/volumes machine-wide, not just this project.",
+)
+
+# --- Prompt: real effect, but sometimes exactly what's needed ------------------------
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "Pushing to a remote is visible to others — confirm before doing it.",
+    not_match = ["git push --force", "git push -f"],
+)
+
+prefix_rule(
+    pattern = ["git", "checkout"],
+    decision = "prompt",
+    justification = "Can discard uncommitted changes depending on args — confirm first.",
+)
+
+prefix_rule(
+    pattern = ["git", "reset"],
+    decision = "prompt",
+    justification = "Non-hard resets still rewrite working/index state — confirm first.",
+    not_match = ["git reset --hard"],
+)
+
+prefix_rule(
+    pattern = ["npx", "prisma", "migrate", "deploy"],
+    decision = "prompt",
+    justification = "Applies migrations against whichever database DATABASE_URL currently points at — confirm the target first.",
+)
+
+prefix_rule(
+    pattern = ["npx", "prisma", "migrate", "resolve"],
+    decision = "prompt",
+    justification = "Manually marks a migration's state — a mistake here corrupts migration history.",
+)
+
+prefix_rule(
+    pattern = ["docker", "volume", "rm"],
+    decision = "prompt",
+    justification = "Removes a named volume (e.g. the Postgres data volume) — confirm before deleting local data.",
+)

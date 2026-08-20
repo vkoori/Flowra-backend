@@ -1,0 +1,28 @@
+# Project-scoped Codex CLI configuration.
+#
+# This file only takes effect once this repository is marked TRUSTED in Codex
+# (see AGENTS.md §6.1). Codex deliberately ignores several security-sensitive keys at
+# this project-local layer — approval_policy, sandbox_mode, model_provider/model_providers,
+# notify, profile/profiles, among others — so a repository can never grant itself
+# broader permissions just by shipping a config file. Those keys must be set in your own
+# ~/.codex/config.toml instead; see .codex/README.md for the recommended additions.
+
+model_reasoning_effort = "high"
+
+[agents]
+enabled = true
+# Turns on Codex's multi-agent tools so the .codex/agents/*.toml subagents below can be
+# spawned by name. If your installed Codex version ignores this key at project scope,
+# add the same line to ~/.codex/config.toml instead.
+
+# --- MCP servers ---------------------------------------------------------------------
+# Read-only by default. Mirrors the rationale in .claude/plugins/mcp-servers.json — see
+# .codex/README.md for the full writeup.
+
+[mcp_servers.postgres]
+command = "uvx"
+args = ["postgres-mcp", "--access-mode=restricted"]
+env = { DATABASE_URI = "${DATABASE_URI}" }
+
+[mcp_servers.prisma]
+url = "https://mcp.prisma.io/mcp"

@@ -1,0 +1,128 @@
+<style>
+#erdC svg.erDiagram .divider path { stroke-opacity: 0.5; }
+#erdC svg.erDiagram .row-rect-odd path,
+#erdC svg.erDiagram .row-rect-odd rect,
+#erdC svg.erDiagram .row-rect-even path,
+#erdC svg.erDiagram .row-rect-even rect { stroke: none !important; }
+</style>
+<div id="erdC"></div>
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"anthropic-sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '13px',
+    fontFamily: '"anthropic-sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+  },
+});
+const { svg } = await mermaid.render('erdC-svg', `erDiagram
+  SOCIAL_ACCOUNTS ||--o{ FLOWS : configures
+  FLOWS ||--o{ FLOW_VERSIONS : versioned_by
+  FLOW_VERSIONS ||--o{ FLOW_SESSIONS : instantiates
+  CONVERSATIONS ||--o| FLOW_SESSIONS : hosts
+  SOCIAL_ACCOUNTS ||--o| ASSISTANT_CONFIGS : tuned_by
+  SOCIAL_ACCOUNTS ||--o{ KNOWLEDGE_SOURCES : registers
+  KNOWLEDGE_SOURCES ||--o{ KNOWLEDGE_CHUNKS : yields
+  KNOWLEDGE_SOURCES ||--o{ PRODUCTS : extracts
+  SOCIAL_ACCOUNTS {
+    uuid id PK
+    string platform
+  }
+  CONVERSATIONS {
+    uuid id PK
+    uuid tenure_id FK
+    string status
+  }
+  FLOWS {
+    uuid id PK
+    uuid social_account_id FK
+    string name
+    bool enabled
+    uuid active_version_id FK
+  }
+  FLOW_VERSIONS {
+    uuid id PK
+    uuid flow_id FK
+    int version
+    jsonb graph
+    timestamp published_at
+  }
+  FLOW_SESSIONS {
+    uuid id PK
+    uuid flow_id FK
+    uuid flow_version_id FK
+    uuid conversation_id FK
+    string current_step
+    jsonb state
+    string status
+    int reprompt_count
+    timestamp awaiting_since
+    timestamp expires_at
+  }
+  ASSISTANT_CONFIGS {
+    uuid id PK
+    uuid social_account_id FK
+    text instruction
+    string tone
+    float confidence_threshold
+    bool enabled
+  }
+  KNOWLEDGE_SOURCES {
+    uuid id PK
+    uuid social_account_id FK
+    string type
+    string url
+    string status
+    timestamp last_crawled_at
+  }
+  KNOWLEDGE_CHUNKS {
+    uuid id PK
+    uuid source_id FK
+    text content
+    tsvector lexical
+    vector embedding
+    string checksum
+  }
+  PRODUCTS {
+    uuid id PK
+    uuid source_id FK
+    uuid social_account_id FK
+    string model
+    int ram_gb
+    int storage_gb
+    string color
+    numeric price
+    bool in_stock
+    string review_state
+  }`);
+document.getElementById('erdC').innerHTML = svg;
+document.querySelectorAll('#erdC svg.erDiagram .node').forEach(node => {
+  const firstPath = node.querySelector('path[d]');
+  if (!firstPath) return;
+  const d = firstPath.getAttribute('d');
+  const nums = d.match(/-?[\d.]+/g)?.map(Number);
+  if (!nums || nums.length < 8) return;
+  const xs = [nums[0], nums[2], nums[4], nums[6]];
+  const ys = [nums[1], nums[3], nums[5], nums[7]];
+  const x = Math.min(...xs), y = Math.min(...ys);
+  const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', x); rect.setAttribute('y', y);
+  rect.setAttribute('width', w); rect.setAttribute('height', h);
+  rect.setAttribute('rx', '8');
+  for (const a of ['fill', 'stroke', 'stroke-width', 'class', 'style']) {
+    if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+  }
+  firstPath.replaceWith(rect);
+});
+document.querySelectorAll('#erdC svg.erDiagram .row-rect-odd path, #erdC svg.erDiagram .row-rect-even path').forEach(p => {
+  p.setAttribute('stroke', 'none');
+});
+</script>

@@ -1,0 +1,21 @@
+# Node
+node_modules/
+dist/
+build/
+generated/
+coverage/
+*.log
+npm-debug.log*
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Claude Code local overrides — personal, never shared
+.claude/settings.local.json
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/

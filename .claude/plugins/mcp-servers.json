@@ -1,0 +1,18 @@
+{
+  "$note": "Documented, versioned source of truth for this project's recommended MCP servers. Mirrored into the root .mcp.json, which is the file Claude Code actually loads — see README.md in this directory for why both files exist and how to keep them in sync.",
+  "mcpServers": {
+    "postgres": {
+      "command": "uvx",
+      "args": ["postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${DATABASE_URI}"
+      },
+      "$rationale": "Read-only (--access-mode=restricted) schema/query introspection against the dev database, from crystaldba/postgres-mcp. Restricted mode runs everything in a read-only transaction and rejects statements that try to escape it. Used to verify module table ownership (CLAUDE.md §2.2) and inspect the executions/outbox tables during dispatch/reliability work — never to run migrations or writes. Requires 'uv'/'uvx' installed locally; DATABASE_URI must be exported in the shell that launches Claude Code."
+    },
+    "prisma": {
+      "type": "http",
+      "url": "https://mcp.prisma.io/mcp",
+      "$rationale": "Official, Prisma-hosted remote MCP server for schema/migration assistance and Prisma Studio access. Authenticates interactively via Prisma Console on first use — no token is stored in this repo. Not available in unattended/headless runs until that first interactive auth has happened once per machine."
+    }
+  }
+}

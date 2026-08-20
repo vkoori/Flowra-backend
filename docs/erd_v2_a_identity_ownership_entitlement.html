@@ -1,0 +1,138 @@
+<style>
+#erdA svg.erDiagram .divider path { stroke-opacity: 0.5; }
+#erdA svg.erDiagram .row-rect-odd path,
+#erdA svg.erDiagram .row-rect-odd rect,
+#erdA svg.erDiagram .row-rect-even path,
+#erdA svg.erDiagram .row-rect-even rect { stroke: none !important; }
+</style>
+<div id="erdA"></div>
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"anthropic-sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '13px',
+    fontFamily: '"anthropic-sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+  },
+});
+const { svg } = await mermaid.render('erdA-svg', `erDiagram
+  USERS ||--o{ ACCOUNT_TENURES : holds
+  SOCIAL_ACCOUNTS ||--o{ ACCOUNT_TENURES : held_over_time
+  SOCIAL_ACCOUNTS ||--o{ ACCOUNT_TRANSFERS : contested_by
+  SOCIAL_ACCOUNTS ||--o| CHANNEL_CONNECTIONS : authorized_by
+  SOCIAL_ACCOUNTS ||--o| SUBSCRIPTIONS : carries
+  PLANS ||--o{ SUBSCRIPTIONS : instantiates
+  SOCIAL_ACCOUNTS ||--o{ QUOTA_COUNTERS : metered_by
+  SOCIAL_ACCOUNTS ||--o{ RETENTION_POLICIES : governed_by
+  USERS ||--o{ AUDIT_LOGS : performs
+  USERS {
+    uuid id PK
+    string email UK
+    string password_hash
+    timestamp created_at
+  }
+  SOCIAL_ACCOUNTS {
+    uuid id PK
+    string platform
+    string external_account_id
+    string display_name
+    timestamp created_at
+  }
+  ACCOUNT_TENURES {
+    uuid id PK
+    uuid social_account_id FK
+    uuid user_id FK
+    timestamp started_at
+    timestamp ended_at
+    string end_reason
+  }
+  ACCOUNT_TRANSFERS {
+    uuid id PK
+    uuid social_account_id FK
+    uuid from_user_id FK
+    uuid to_user_id FK
+    string resolution
+    bool config_carried_over
+    timestamp resolved_at
+  }
+  CHANNEL_CONNECTIONS {
+    uuid id PK
+    uuid social_account_id FK
+    uuid authorized_by FK
+    string adapter
+    string risk
+    bytes credentials_enc
+    jsonb capabilities
+    string status
+    timestamp token_expires_at
+  }
+  PLANS {
+    uuid id PK
+    string code UK
+    string name
+    jsonb limits
+    bool is_active
+  }
+  SUBSCRIPTIONS {
+    uuid id PK
+    uuid social_account_id FK
+    uuid plan_id FK
+    uuid purchased_by FK
+    string status
+    string activated_by
+    timestamp starts_at
+    timestamp ends_at
+    timestamp grace_until
+  }
+  QUOTA_COUNTERS {
+    uuid id PK
+    uuid social_account_id FK
+    string metric
+    date period_start
+    int used
+  }
+  RETENTION_POLICIES {
+    uuid id PK
+    uuid social_account_id FK
+    string entity
+    int ttl_days
+  }
+  AUDIT_LOGS {
+    uuid id PK
+    uuid actor_user_id FK
+    uuid social_account_id FK
+    string action
+    jsonb metadata
+    timestamp created_at
+  }`);
+document.getElementById('erdA').innerHTML = svg;
+document.querySelectorAll('#erdA svg.erDiagram .node').forEach(node => {
+  const firstPath = node.querySelector('path[d]');
+  if (!firstPath) return;
+  const d = firstPath.getAttribute('d');
+  const nums = d.match(/-?[\d.]+/g)?.map(Number);
+  if (!nums || nums.length < 8) return;
+  const xs = [nums[0], nums[2], nums[4], nums[6]];
+  const ys = [nums[1], nums[3], nums[5], nums[7]];
+  const x = Math.min(...xs), y = Math.min(...ys);
+  const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', x); rect.setAttribute('y', y);
+  rect.setAttribute('width', w); rect.setAttribute('height', h);
+  rect.setAttribute('rx', '8');
+  for (const a of ['fill', 'stroke', 'stroke-width', 'class', 'style']) {
+    if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+  }
+  firstPath.replaceWith(rect);
+});
+document.querySelectorAll('#erdA svg.erDiagram .row-rect-odd path, #erdA svg.erDiagram .row-rect-even path').forEach(p => {
+  p.setAttribute('stroke', 'none');
+});
+</script>
