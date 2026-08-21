@@ -370,10 +370,13 @@ function main() {
       }
     }
 
-    // Prisma boundary — repo-wide except the one sanctioned service and persistence/.
+    // Prisma boundary — repo-wide except the one sanctioned service, persistence/, and
+    // mappers/ (CLAUDE.md/AGENTS.md §3 assigns "DB row <-> domain entity" mapping to
+    // infrastructure/mappers/, which necessarily types its input as the Prisma row).
     const inPersistence = relPath.includes('/infrastructure/persistence/');
+    const inMappers = relPath.includes('/infrastructure/mappers/');
     const isAllowedPrismaFile = PRISMA_ALLOWED_FILES.has(relPath);
-    if (!inPersistence && !isAllowedPrismaFile) {
+    if (!inPersistence && !inMappers && !isAllowedPrismaFile) {
       for (const imp of facts.imports) {
         const touchesPrisma =
           imp.spec === '@prisma/client' ||
@@ -525,10 +528,14 @@ function main() {
       }
     }
 
-    // Naming convention.
+    // Naming convention. A co-located spec file (foo.entity.spec.ts) is checked against
+    // the same suffix as its subject (foo.entity.ts) — de-spec the name first.
+    const despecedPath = relPath
+      .replace(/\.e2e-spec\.ts$/, '.ts')
+      .replace(/\.spec\.ts$/, '.ts');
     for (const rule of NAMING_RULES) {
       if (relPath.includes(rule.dirSuffix + '/')) {
-        const ok = rule.mustEndWith.some((suffix) => relPath.endsWith(suffix));
+        const ok = rule.mustEndWith.some((suffix) => despecedPath.endsWith(suffix));
         if (!ok) {
           pushViolation(
             violations,

@@ -1,3 +1,12 @@
 {
-  "INTERNAL_ERROR": "خطای داخلی سرور"
+  "INTERNAL_ERROR": "خطای داخلی سرور",
+  "INVALID_EMAIL": "آدرس ایمیل معتبر نیست.",
+  "TENURE_ALREADY_CLOSED": "این دوره مدیریت حساب قبلاً پایان یافته است.",
+  "TRANSFER_ALREADY_RESOLVED": "این انتقال مالکیت قبلاً نهایی شده است.",
+  "CONNECTION_ALREADY_DEACTIVATED": "این اتصال کانال قبلاً غیرفعال شده است.",
+  "SUBSCRIPTION_ALREADY_TERMINAL": "این اشتراک در وضعیت نهایی قرار دارد.",
+  "INVALID_EXECUTION_TRANSITION": "این اجرا نمی‌تواند از وضعیت فعلی به وضعیت درخواستی تغییر کند.",
+  "FLOW_SESSION_ALREADY_CLOSED": "این گفتگوی خودکار قبلاً پایان یافته است.",
+  "DUPLICATE_INBOUND_EVENT": "این رویداد قبلاً دریافت شده است.",
+  "MODERATION_DECISION_ALREADY_RESOLVED": "این تصمیم نظارتی قبلاً نهایی شده است."
 }

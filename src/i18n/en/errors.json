@@ -1,3 +1,12 @@
 {
-  "INTERNAL_ERROR": "Internal server error"
+  "INTERNAL_ERROR": "Internal server error",
+  "INVALID_EMAIL": "That email address is not valid.",
+  "TENURE_ALREADY_CLOSED": "This account tenure has already ended.",
+  "TRANSFER_ALREADY_RESOLVED": "This ownership transfer has already been resolved.",
+  "CONNECTION_ALREADY_DEACTIVATED": "This channel connection has already been deactivated.",
+  "SUBSCRIPTION_ALREADY_TERMINAL": "This subscription is already in a terminal state.",
+  "INVALID_EXECUTION_TRANSITION": "This execution cannot move to that state from its current state.",
+  "FLOW_SESSION_ALREADY_CLOSED": "This conversation flow has already ended.",
+  "DUPLICATE_INBOUND_EVENT": "This event has already been received.",
+  "MODERATION_DECISION_ALREADY_RESOLVED": "This moderation decision has already been resolved."
 }

@@ -3,6 +3,10 @@
 // cross-module SQL joins; ownership here is what "which module's tables" means).
 // pgvector (docs/social-assistant-design-v2.md §2, decision #8) is enabled once the
 // assistant module needs it — not turned on speculatively here.
+//
+// Cross-module references are plain scalar UUID columns with a plain index, never a
+// Prisma `@relation` — a real relation makes a cross-module join one `include: {}` away,
+// which §2.2 bans. Within a module, real `@relation`s are used normally.
 
 generator client {
   provider = "prisma-client-js"
@@ -12,10 +16,425 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
 // Prisma 7: the connection URL is no longer set here. The CLI reads it from
 // prisma.config.ts; the runtime client gets it via a driver adapter
 // (see src/shared/infrastructure/prisma/prisma.service.ts).
 
-// No models yet. Per docs/social-assistant-design-v2.md §12 build order, the first
-// models belong to identity/accounts/channels — added when those modules are
-// scaffolded, not speculatively here.
+// --- shared enums ---
+// Global to the schema (Prisma has no per-module enum namespacing); each is owned by
+// the module noted, but readable by any table that legitimately stores that value.
+
+enum Platform {
+  instagram
+  telegram
+}
+
+// owned by ingestion/automation — the trigger/event vocabulary shared between rules.triggerType and inbound_events.type
+enum EventType {
+  comment_created
+  dm_received
+}
+
+// owned by automation
+enum MatcherMode {
+  exact
+  contains
+  regex
+  any
+}
+
+// owned by automation — executions.originType
+enum ExecutionOriginType {
+  rule
+  flow
+}
+
+// owned by automation — the docs/social-assistant-design-v2.md §5 state machine
+enum ExecutionStatus {
+  pending
+  dispatched
+  running
+  succeeded
+  failed
+  dead_lettered
+}
+
+// owned by accounts
+enum TenureEndReason {
+  transferred
+  revoked
+  closed_by_owner
+}
+
+// owned by accounts
+enum TransferStatus {
+  pending
+  approved
+  rejected
+  expired
+}
+
+// owned by channels
+enum ConnectionStatus {
+  active
+  needs_reauth
+  revoked
+}
+
+// owned by entitlement
+enum SubscriptionStatus {
+  active
+  expired
+  cancelled
+}
+
+// owned by flows
+enum FlowSessionStatus {
+  awaiting
+  completed
+  closed
+  timed_out
+}
+
+// owned by moderation
+enum ModerationState {
+  pending
+  approved
+  restored
+}
+
+// --- identity ---
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  displayName  String   @map("display_name")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+// --- accounts ---
+
+model SocialAccount {
+  id                String   @id @default(uuid())
+  platform          Platform
+  externalAccountId String   @map("external_account_id")
+  displayName       String   @map("display_name")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  tenures           AccountTenure[]
+  transfers         AccountTransfer[]
+  retentionPolicies RetentionPolicy[]
+
+  @@unique([platform, externalAccountId])
+  @@map("social_accounts")
+}
+
+// The "exactly one active tenure" invariant (design doc §4) is enforced by a partial
+// unique index — `UNIQUE (social_account_id) WHERE ended_at IS NULL` — added by hand to
+// the generated migration SQL, because Prisma has no declarative syntax for a filtered
+// unique constraint. The `@@index` below is just a lookup index, not the real constraint;
+// check the migration, not this file, for the actual guarantee.
+model AccountTenure {
+  id              String           @id @default(uuid())
+  socialAccountId String           @map("social_account_id")
+  userId          String           @map("user_id")
+  startedAt       DateTime         @default(now()) @map("started_at")
+  endedAt         DateTime?        @map("ended_at")
+  endReason       TenureEndReason? @map("end_reason")
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id])
+
+  @@index([socialAccountId])
+  @@index([userId])
+  @@map("account_tenures")
+}
+
+model AccountTransfer {
+  id                  String         @id @default(uuid())
+  socialAccountId     String         @map("social_account_id")
+  fromTenureId        String?        @map("from_tenure_id")
+  toUserId            String         @map("to_user_id")
+  status              TransferStatus @default(pending)
+  objectionDeadlineAt DateTime       @map("objection_deadline_at")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  resolvedAt          DateTime?      @map("resolved_at")
+
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id])
+
+  @@index([socialAccountId])
+  @@map("account_transfers")
+}
+
+model RetentionPolicy {
+  id              String   @id @default(uuid())
+  socialAccountId String   @map("social_account_id")
+  dataClass       String   @map("data_class")
+  ttlDays         Int?     @map("ttl_days")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id])
+
+  @@unique([socialAccountId, dataClass])
+  @@map("retention_policies")
+}
+
+// --- channels ---
+
+model ChannelConnection {
+  id                    String           @id @default(uuid())
+  socialAccountId       String           @map("social_account_id")
+  platform              Platform
+  accessTokenEncrypted  String           @map("access_token_encrypted")
+  refreshTokenEncrypted String?          @map("refresh_token_encrypted")
+  tokenExpiresAt        DateTime?        @map("token_expires_at")
+  capabilities          String[]
+  status                ConnectionStatus @default(active)
+  authorizedByUserId    String           @map("authorized_by_user_id")
+  deletedAt             DateTime?        @map("deleted_at")
+  createdAt             DateTime         @default(now()) @map("created_at")
+  updatedAt             DateTime         @updatedAt @map("updated_at")
+
+  @@index([socialAccountId])
+  @@map("channel_connections")
+}
+
+// --- entitlement ---
+
+model Plan {
+  id                  String   @id @default(uuid())
+  name                String
+  code                String   @unique
+  monthlyMessageQuota Int      @map("monthly_message_quota")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+// One-active-subscription-per-account (design doc §4) is a partial unique index —
+// `UNIQUE (social_account_id) WHERE status = 'active'` — hand-added to the migration
+// SQL, same reason and same caveat as AccountTenure above.
+model Subscription {
+  id                 String             @id @default(uuid())
+  socialAccountId    String             @map("social_account_id")
+  planId             String             @map("plan_id")
+  status             SubscriptionStatus @default(active)
+  purchasedByUserId  String             @map("purchased_by_user_id")
+  currentPeriodStart DateTime           @map("current_period_start")
+  currentPeriodEnd   DateTime           @map("current_period_end")
+  graceUntil         DateTime?          @map("grace_until")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  plan Plan @relation(fields: [planId], references: [id])
+
+  @@index([socialAccountId])
+  @@map("subscriptions")
+}
+
+model QuotaCounter {
+  id              String   @id @default(uuid())
+  socialAccountId String   @map("social_account_id")
+  metric          String
+  periodStart     DateTime @map("period_start")
+  periodEnd       DateTime @map("period_end")
+  count           Int      @default(0)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([socialAccountId, metric, periodStart])
+  @@map("quota_counters")
+}
+
+// --- automation ---
+
+model Rule {
+  id                   String      @id @default(uuid())
+  socialAccountId      String      @map("social_account_id")
+  enabled              Boolean     @default(true)
+  priority             Int         @default(0)
+  triggerType          EventType   @map("trigger_type")
+  triggerScope         Json?       @map("trigger_scope")
+  matcherMode          MatcherMode @map("matcher_mode")
+  matcherValues        String[]    @map("matcher_values")
+  matcherCaseSensitive Boolean     @default(false) @map("matcher_case_sensitive")
+  conditions           Json
+  actions              Json
+  createdAt            DateTime    @default(now()) @map("created_at")
+  updatedAt            DateTime    @updatedAt @map("updated_at")
+
+  @@index([socialAccountId])
+  @@map("rules")
+}
+
+model Execution {
+  id               String              @id @default(uuid())
+  originType       ExecutionOriginType @map("origin_type")
+  originId         String              @map("origin_id")
+  eventId          String              @map("event_id")
+  actionIndex      Int                 @map("action_index")
+  status           ExecutionStatus     @default(pending)
+  actionType       String              @map("action_type")
+  actionParams     Json                @map("action_params")
+  scheduledAt      DateTime            @map("scheduled_at")
+  nextAttemptAt    DateTime?           @map("next_attempt_at")
+  attempts         Int                 @default(0)
+  maxAttempts      Int                 @default(5) @map("max_attempts")
+  deadLetterReason String?             @map("dead_letter_reason")
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  @@unique([originType, originId, eventId, actionIndex])
+  @@index([status, nextAttemptAt])
+  @@map("executions")
+}
+
+// --- flows ---
+
+model Flow {
+  id              String   @id @default(uuid())
+  socialAccountId String   @map("social_account_id")
+  name            String
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  versions FlowVersion[]
+
+  @@index([socialAccountId])
+  @@map("flows")
+}
+
+model FlowVersion {
+  id        String   @id @default(uuid())
+  flowId    String   @map("flow_id")
+  version   Int
+  graph     Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  flow     Flow          @relation(fields: [flowId], references: [id])
+  sessions FlowSession[]
+
+  @@unique([flowId, version])
+  @@map("flow_versions")
+}
+
+// One-live-dialogue-per-conversation (design doc §5) is a partial unique index —
+// `UNIQUE (conversation_id) WHERE status = 'awaiting'` — hand-added to the migration
+// SQL, same reason and same caveat as AccountTenure above.
+model FlowSession {
+  id             String            @id @default(uuid())
+  conversationId String            @map("conversation_id")
+  flowVersionId  String            @map("flow_version_id")
+  status         FlowSessionStatus @default(awaiting)
+  currentStepId  String            @map("current_step_id")
+  context        Json              @default("{}")
+  repromptCount  Int               @default(0) @map("reprompt_count")
+  expiresAt      DateTime?         @map("expires_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  flowVersion FlowVersion @relation(fields: [flowVersionId], references: [id])
+
+  @@index([conversationId])
+  @@map("flow_sessions")
+}
+
+// --- ingestion ---
+// Also owns conversations/messages — the natural home for what inbound events become,
+// not explicitly assigned to a module in docs/social-assistant-design-v2.md §3.
+
+model InboundEvent {
+  id                String    @id @default(uuid())
+  tenureId          String    @map("tenure_id")
+  socialAccountId   String    @map("social_account_id")
+  platform          Platform
+  type              EventType
+  externalId        String    @map("external_id")
+  dedupeKey         String    @unique @map("dedupe_key")
+  authorExternalId  String    @map("author_external_id")
+  authorRefHash     String    @map("author_ref_hash")
+  rawText           String    @map("raw_text")
+  normalizedText    String    @map("normalized_text")
+  normalizerVersion Int       @map("normalizer_version")
+  context           Json?
+  occurredAt        DateTime  @map("occurred_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  @@index([tenureId])
+  @@index([socialAccountId])
+  @@map("inbound_events")
+}
+
+// `platform` is denormalized here rather than derived by following tenureId across a
+// module boundary — the correct move per §2.2 when a report/read needs data that would
+// otherwise require a cross-module join.
+model Conversation {
+  id              String    @id @default(uuid())
+  tenureId        String    @map("tenure_id")
+  platform        Platform
+  participantHash String    @map("participant_hash")
+  windowExpiresAt DateTime? @map("window_expires_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  messages Message[]
+
+  @@index([tenureId, participantHash])
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String   @map("conversation_id")
+  direction      String
+  inboundEventId String?  @map("inbound_event_id")
+  rawText        String   @map("raw_text")
+  normalizedText String   @map("normalized_text")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId])
+  @@map("messages")
+}
+
+// --- moderation ---
+// Deterministic layer only — no LLM classifier fields beyond the generic score/reasons
+// the design doc already specifies for the deterministic checks themselves.
+
+model ModerationDecision {
+  id              String          @id @default(uuid())
+  eventId         String          @unique @map("event_id")
+  state           ModerationState @default(pending)
+  score           Float?
+  reasons         String[]
+  decidedByUserId String?         @map("decided_by_user_id")
+  decidedAt       DateTime?       @map("decided_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@map("moderation_decisions")
+}
+
+// --- audit ---
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorUserId String?  @map("actor_user_id")
+  action      String
+  targetType  String   @map("target_type")
+  targetId    String   @map("target_id")
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
