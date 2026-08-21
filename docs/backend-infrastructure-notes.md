@@ -3,18 +3,46 @@
 Rationale for infrastructure and architectural choices that would otherwise live as
 inline comments. `CLAUDE.md`/`AGENTS.md` is the binding governance layer (the rules);
 this file is the "why" behind specific pieces of code that implement those rules.
-Organized by file so it's easy to find the note for whatever you're reading.
+Organized by file so it's easy to find the note for whatever you're reading. Where the
+rationale already lives as an inline comment right next to the code (e.g.
+`prisma/schema.prisma`'s per-model ownership/invariant comments), this file links to it
+rather than duplicating it — two copies of the same "why" just means one of them goes
+stale first.
 
 ## `docker-compose.yml`
 
-Local dev infra only — Postgres (with pgvector) and Redis, plus SeaweedFS for S3-compatible
-object storage. The application itself runs on the host via `npm run start:dev`, not from
-this file. The four-role container topology (CLAUDE.md/AGENTS.md §1 — one Dockerfile, four
-`APP_MODE`-selected instances) is a separate, later concern.
+Local dev infra only — Postgres (with pgvector), Redis, and SeaweedFS for S3-compatible
+object storage. The application itself runs on the host via `npm run start:dev`, not
+from this file; the four-role container topology (CLAUDE.md/AGENTS.md §1 — one
+Dockerfile, four `APP_MODE`-selected instances) is a separate, later concern.
 
-`docker/postgres-init/` creates a second database, `flowra_test`, alongside `flowra_dev` on
-first container init — that's why only one `POSTGRES_DB` env var is set here but two
+`docker/postgres-init/` creates a second database, `flowra_test`, alongside `flowra_dev`
+on first container init — that's why only one `POSTGRES_DB` env var is set here but two
 databases exist once the container has started.
+
+**SeaweedFS, not MinIO.** MinIO's community edition was declared maintenance-mode in
+December 2025 and its repo archived in Feb/Apr 2026 — it's dead upstream, so it was
+never wired in here despite being the more familiar default. SeaweedFS is Apache-2.0,
+actively maintained, and specifically strong at high file-count workloads (thumbnails,
+small attachments), which matches this product's media shape (Instagram-post-sized
+images/video) better than the alternatives evaluated at the time (RustFS was still
+alpha with a known crash-under-load bug; Garage is AGPL, the same licensing concern that
+ruled out MinIO). Pinned to `4.43` specifically (not `:latest`) — the current stable
+release, past the pre-4.30 JSONP-reflection XSS fix, and the smallest image variant
+(fewer bundled packages, fewer potential CVEs).
+
+**`seaweedfs`'s master (9333) and filer (8888) ports are deliberately not published** —
+commented out in the `ports:` block. Both have zero request-level authentication at the
+origin (unlike the S3 gateway on 8333, which enforces AWS SigV4 signing). The only
+consumers are this app's own backend and, for admin access, the `seaweedfs-admin`
+service below — neither needs the host to publish these ports, and publishing them
+would make an unauthenticated master/filer reachable from outside the container network
+the moment this ever ran on a machine with a public IP and no firewall.
+
+**`seaweedfs-admin` is a separate service, not a flag on `seaweedfs`** — it's a distinct
+`weed admin` process (session-based login, not the S3 gateway's SigV4), and `-adminUser`
++ `WEED_ADMIN_PASSWORD` are required specifically because leaving `-adminPassword` empty
+disables auth entirely for that dashboard.
 
 ## `src/main.ts`
 
@@ -49,24 +77,76 @@ skill — no hardcoded Persian/Arabic literals in source, and every `t()`/`trans
 must reference a key that actually exists.
 
 `QueueModule` is also safe to wire eagerly — see `queue.module.ts` below for why this doesn't
-force a Redis connection at boot the way importing `PrismaModule` would force a Postgres one.
+force a Redis connection at boot.
 
-Feature modules land in the `imports` array as they're scaffolded (docs/social-assistant-design-v2.md
-§12 build order: identity/accounts/channels first) — it's deliberately empty until the first
-one exists, not an oversight.
+**Feature modules (`identity`, `accounts`, `channels`, `entitlement`, `automation`,
+`flows`, `ingestion`, `dispatch`, `moderation`, `audit`) are still absent from the
+`imports` array**, even though all ten now exist under `src/modules/` with real domain
+layers, repositories, and Prisma migrations. This is deliberate, not lagging: none of
+them have an application-layer use case or controller yet (see each module's own
+`README.md` — this was an explicit, scoped pass covering "modules, models, and
+migrations" only, with use-cases/controllers/wiring as a separate follow-up). A
+module's own `<name>.module.ts` currently declares no providers/controllers either, for
+the same reason — there's nothing to provide yet. Wiring a module into `AppModule`
+before it has anything to serve would just mean carrying dead weight through the DI
+graph.
 
 ## `src/app.controller.ts`
 
 Deliberately lives outside `src/modules/` — it's a liveness probe with no bounded context and
 no business logic. CLAUDE.md/AGENTS.md §4.C.8 still applies: this is transport, nothing else.
 
-## `src/shared/errors/app.error.ts` and `error-code.enum.ts`
+## `src/shared/` layering: `domain/`, `application/ports/`, `infrastructure/{adapters,prisma,bullmq}/`, `presentation/`
+
+`shared/` mirrors the same `domain → application → {presentation, infrastructure}`
+direction as a real module (CLAUDE.md §2.3), without a bounded context of its own. The
+concrete split, and why each thing landed where it did:
+
+- **`domain/`** — pure, framework-free concerns: `errors/` (the `AppError` hierarchy +
+  `ErrorCode`), `idempotency/` (`buildDedupeKey`), `scoping/` (`ScopeContext`,
+  `applyScope`), `text-normalisation/` (`normalizeText`). All four moved here from a
+  flat `shared/<name>/` layout mid-session once the pattern became clear: anything
+  that's a pure function or pure type with zero imports of `@nestjs/*`/`@prisma/client`
+  belongs in `domain/`, matching the `shared/domain/money` example CLAUDE.md itself
+  names.
+- **`application/ports/`** — interfaces only: `Clock`, `Encryptor`, `StorageGateway`,
+  each paired with a `Symbol` DI token. A concern earns a port only when it wraps
+  something genuinely swappable/impure — the system clock, encryption, an external API
+  — per Golden Rules 10/11. `idempotency`/`scoping`/`text-normalisation` deliberately do
+  **not** get a port: there's nothing to swap for a pure function, so introducing one
+  would be indirection with no second implementation to justify it (CLAUDE.md §4.G.23).
+- **`infrastructure/adapters/`** — the implementations of those ports: `SystemClock`,
+  `AesGcmEncryptor`, `S3StorageGateway`. This is also where Golden Rule 11 ("external
+  APIs are gateways... implement an adapter in `infrastructure/adapters/`") pointed once
+  a real external-API case (S3) showed up — `crypto`/`clock` were briefly flat
+  (port + impl in one folder) before `S3StorageGateway` arrived and made the
+  port/adapter split the right call for anything crossing a real network boundary.
+- **`infrastructure/prisma/` and `infrastructure/bullmq/` stay flat**, unlike
+  `adapters/` — `PrismaService` and the BullMQ connection wiring have no port at all:
+  nothing else could stand in for either, so there's no interface to extract.
+- **`presentation/`** — interface adapters: `filters/` (`AppExceptionFilter`), `http/`
+  (response envelope, response interceptor), `swagger/` (`setupSwagger`), `bullmq/`
+  (Bull Board admin UI wiring).
+
+## `src/shared/domain/idempotency/dedupe-key.ts`
+
+`buildDedupeKey(attributes: Record<string, string>)` sorts the attribute keys, then
+SHA-256-hashes the JSON-stringified result — it does **not** join parts positionally
+with a delimiter. That was the original design (`platform:accountId:type:externalId`
+joined by colons), replaced because a positional join makes the caller's argument order
+load-bearing (get the order wrong once and dedup silently stops working) and can't
+safely handle a value that itself contains the delimiter. Sorting the keys first makes
+the function's output independent of how the caller happened to construct the
+attribute object, and hashing produces a fixed-length, delimiter-safe key regardless of
+what the attribute values contain.
+
+## `src/shared/domain/errors/app.error.ts` and `error-code.enum.ts`
 
 Domain/application code throws `AppError` subclasses; only the exception filter
 (`shared/presentation/filters/app-exception.filter.ts`) maps them to HTTP, since response
 shaping/status codes are a presentation concern (CLAUDE.md/AGENTS.md §4.F.19). Domain code
 must never import this file's subclasses for their HTTP concerns — the `httpStatus` field
-lives on `AppError` only because `shared/errors` is the one place both the domain-error
+lives on `AppError` only because `shared/domain/errors` is the one place both the domain-error
 hierarchy and its presentation-layer mapping are allowed to meet.
 
 `code` is typed as the shared `ErrorCode` enum, not a bare string. Every module's domain
@@ -77,7 +157,14 @@ wrong message for two different failures. `ErrorCode` is a plain enum with zero 
 dependencies, so domain code importing it doesn't violate domain purity.
 
 `INTERNAL_ERROR` and `HTTP_EXCEPTION` are the two codes the exception filter itself produces
-for non-`AppError` cases; everything else belongs to whichever module's domain error owns it.
+for non-`AppError` cases; everything else belongs to whichever module's domain error owns it
+— currently `INVALID_EMAIL` (identity), `TENURE_ALREADY_CLOSED`/`TRANSFER_ALREADY_RESOLVED`
+(accounts), `CONNECTION_ALREADY_DEACTIVATED` (channels), `SUBSCRIPTION_ALREADY_TERMINAL`
+(entitlement), `INVALID_EXECUTION_TRANSITION` (automation), `FLOW_SESSION_ALREADY_CLOSED`
+(flows), `DUPLICATE_INBOUND_EVENT` (ingestion), and
+`MODERATION_DECISION_ALREADY_RESOLVED` (moderation) — each added alongside its owning
+module's domain error and a matching `en`/`fa` translation, enforced by the `validate-i18n`
+skill.
 
 `HTTP_EXCEPTION` deliberately has **no** `errors.HTTP_EXCEPTION` key in `errors.json`, and
 never should: a framework-thrown `HttpException` (404, a pipe's `BadRequestException`, ...)
@@ -118,27 +205,41 @@ Zod v4's `z.toJSONSchema()` don't render correctly in the Swagger UI.
 `maxRetriesPerRequest: null` is BullMQ's own connection requirement, not a style choice — see
 `node_modules/bullmq`'s `RedisConnection`, which throws/warns otherwise.
 
-`lazyConnect: true` matters because zero queues exist yet (`dispatch`/`automation` aren't
-built) — without it, ioredis dials Redis immediately at boot and retries forever, which is
-wasted work and log noise when nothing is using the connection. BullMQ opens the connection for
-real the moment a feature module registers an actual queue.
+`lazyConnect: true` matters because zero queues are registered yet — `automation` and
+`dispatch` exist as modules with real domain logic (including `automation`'s
+`ExecutionRepository.claimBatch()`, ready for a dispatcher to call), but nothing has
+called `BullModule.registerQueue()`/`@InjectQueue()` yet, because that's use-case-layer
+wiring and none exists for any module yet (see `app.module.ts` above). Without
+`lazyConnect`, ioredis would dial Redis immediately at boot and retry forever — wasted
+work and log noise for a connection nothing is using. BullMQ opens it for real the
+moment a feature module registers an actual queue.
 
 This module is safe to wire eagerly into `AppModule` despite the "don't connect until needed"
 rule that keeps `PrismaModule` out of it (see below): `forRootAsync` only stores connection
-options — BullMQ opens the actual Redis connection lazily, the first time a feature module
-calls `BullModule.registerQueue()`/`@InjectQueue()`, of which none exist yet.
+options — BullMQ opens the actual Redis connection lazily.
 
-## `src/shared/infrastructure/prisma/prisma.module.ts` and `prisma.service.ts`
+## `src/shared/infrastructure/prisma/prisma.module.ts`, `prisma.service.ts`, `prisma-unique-violation.ts`
 
-`PrismaModule` is not yet imported into `AppModule` — no module needs a database connection
-until the first feature module (`identity`, per docs/social-assistant-design-v2.md §12 build
-order) is scaffolded. Importing it unconditionally would force every local
-`npm run start:dev` to require a live Postgres just to serve `/health`.
+`PrismaModule` is still not imported into `AppModule`. Every one of the ten feature
+modules now has real Prisma repository implementations (`prisma-*.repository.ts`) built
+against `PrismaService`, and the migration is applied — but nothing in `AppModule`'s own
+tree constructs any of those repositories yet, since no use case or controller exists to
+inject them into. Importing `PrismaModule` unconditionally before that would force every
+local `npm run start:dev` to require a live Postgres just to serve `/health`, for no
+present benefit.
 
 Prisma 7 requires a driver adapter at the client, not a `schema.prisma` URL — see
 `prisma.config.ts` for the CLI-side counterpart. `PrismaService` is the one place in the
 codebase that constructs a `PrismaClient`; every module's `prisma-*.repository.ts`
-(CLAUDE.md/AGENTS.md §4.D.10) depends on this service, never on `PrismaClient` directly.
+(CLAUDE.md/AGENTS.md §4.D.10) and every module's `infrastructure/mappers/*.mapper.ts`
+(CLAUDE.md §3 — DB row ↔ domain entity mapping necessarily needs the Prisma row type)
+depend on this service or its generated types, never a raw `PrismaClient` constructed
+elsewhere.
+
+`isUniqueConstraintViolation()` wraps the `P2002` Prisma error code check in one place —
+`ingestion`'s `PrismaInboundEventRepository` uses it to translate a duplicate-webhook
+insert into a domain `DuplicateInboundEventError` rather than letting a raw Prisma
+error escape the repository boundary.
 
 ## `prisma.config.ts`
 
@@ -146,7 +247,23 @@ CLI-side config only (`migrate`/`studio`/`introspect`). The runtime client does 
 file — it gets its connection via the driver adapter in `PrismaService` instead. Kept as a
 plain `.ts` file at the repo root because that's where Prisma 7's CLI looks for it by default.
 
-## `src/shared/text-normalisation/normalize-text.ts`
+## `prisma/schema.prisma` and `prisma/migrations/`
+
+17 tables across 9 of the 10 modules (`dispatch` owns none — it operates on
+`automation`'s `executions` via that module's public API, per CLAUDE.md §0.1's
+`automation → dispatch` dependency direction), plus 11 shared enums. The schema file
+carries its own inline rationale next to each model — read it there, not here, for:
+why cross-module references are plain scalar columns rather than Prisma `@relation`s
+(top-of-file comment), which three constraints (`AccountTenure`, `Subscription`,
+`FlowSession`) needed a hand-authored partial unique index in
+`prisma/migrations/20260821114557_init/migration.sql` because Prisma has no declarative
+syntax for a filtered unique constraint, and why `Conversation.platform` is
+denormalized rather than derived by following `tenureId` across a module boundary.
+
+pgvector (design doc §2 decision #8) is still not enabled — it turns on when the
+`assistant` module needs it, not speculatively ahead of that.
+
+## `src/shared/domain/text-normalisation/normalize-text.ts`
 
 Unit-expression matching (e.g. `"256GB"` vs `"۲۵۶ گیگ"`) is out of scope here — that's
 assistant-module product-spec matching, not general keyword normalization. Do not
@@ -174,3 +291,29 @@ prefix would silently fail to catch the single most common violation shape. Matc
 `no-floating-promises`/`no-misused-promises` are enforced repo-wide per CLAUDE.md/AGENTS.md
 §4.H.26 (Fastify/Node crashes the process on an unhandled promise rejection).
 `Scope.REQUEST` is banned outright via `no-restricted-syntax` per §4.H.25.
+
+## `.claude/skills/validate-architecture/validate-architecture.js`
+
+Two rules here were briefly stricter than CLAUDE.md itself and had to be relaxed once
+real per-module code existed to test them against: the naming-convention check now
+de-specs a co-located `*.spec.ts` file (`foo.entity.spec.ts`) before checking its suffix
+against its subject's own rule, rather than requiring the spec file itself to end in
+`.entity.ts`; and the Prisma-boundary check now allows `infrastructure/mappers/`
+alongside `infrastructure/persistence/`, since CLAUDE.md §3 explicitly assigns "DB row
+↔ domain entity" mapping to the former, which necessarily types its input as the
+Prisma row. Both fixes are mirrored byte-for-byte in `.agents/skills/` — the Claude and
+Codex copies must never drift.
+
+## Testing: what's covered, what isn't
+
+Every module built so far has unit tests for its domain entities (pure, no DB),
+`infrastructure/mappers/*.mapper.ts` (pure round-trip tests), and
+`infrastructure/persistence/prisma-*.repository.ts` (mocked `PrismaService` — asserting
+the right Prisma delegate method is called with the right arguments and the result maps
+correctly). None of this exercises a real Postgres. CLAUDE.md §4.G.22's "Infrastructure:
+real Postgres/Redis via Testcontainers" tier isn't wired up in this repo yet — in
+particular, the three hand-authored partial unique indexes and `automation`'s
+`claimBatch()` (`SELECT ... FOR UPDATE SKIP LOCKED`) have real constraint/concurrency
+semantics a mock can't exercise. Each affected module's `README.md` flags this in its
+own "Open questions" section; recorded here too as the one cross-cutting gap common to
+all of them, so it doesn't need rediscovering module by module.
