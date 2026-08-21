@@ -13,16 +13,16 @@ seem to disagree.
 ## Before writing anything
 
 1. Identify which module (`CLAUDE.md` §2) and which layer (`domain` / `application` /
-   `infrastructure`, §3) the change belongs to. If it doesn't obviously belong to an
-   existing module, stop and ask rather than inventing a new one or bolting it onto
-   `shared/`.
+   `presentation` / `infrastructure`, §3) the change belongs to. If it doesn't
+   obviously belong to an existing module, stop and ask rather than inventing a new one
+   or bolting it onto `shared/`.
 2. If the task touches product behavior (ownership, execution states, the rule/flow
    engine, moderation, retention), check `docs/social-assistant-design-v2.md` first.
    Do not invent business rules that document already answers.
 3. If the task touches `dispatch/`, `automation/`, `ingestion/`, or anything with
-   retries/idempotency/queues, re-read `CLAUDE.md` §0.1 before writing a line — the
-   BullMQ-vs-design-doc divergence has specific, non-obvious rules about who owns
-   status (Postgres, always) and how cancellation works.
+   retries/idempotency/queues, re-read `CLAUDE.md` §0.1 before writing a line — it has
+   specific, non-obvious rules about who owns status (Postgres, always) and how
+   cancellation works with BullMQ as the delivery mechanism.
 
 ## While writing
 
@@ -42,11 +42,16 @@ seem to disagree.
 - **Ports before adapters.** Any call to something external — Prisma, an HTTP API, the
   clock, Redis — goes through an interface defined in `domain/repositories/` or
   `application/ports/`, implemented in `infrastructure/`, wired with a `Symbol` DI token.
+- **Request validation is a presentation concern.** DTOs (Zod schemas via
+  `createZodDto`) live in `presentation/http/dto/` (or `presentation/queue/dto/` for a
+  BullMQ consumer), never in `application/`. A use case's `execute()` takes plain
+  arguments — never a DTO instance. The controller/consumer maps validated DTO fields
+  to plain values before calling the use case.
 - **Module isolation is not optional.** Never import another module's `domain/`,
-  `application/use-cases/`, or `infrastructure/` directly. Either the target module's
-  `index.ts` barrel has what you need, or it needs to export it, or this needs a domain
-  event instead. If you find yourself about to write a deep cross-module import, stop
-  and either extend the target's public API or ask.
+  `application/use-cases/`, `presentation/`, or `infrastructure/` directly. Either the
+  target module's `index.ts` barrel has what you need, or it needs to export it, or
+  this needs a domain event instead. If you find yourself about to write a deep
+  cross-module import, stop and either extend the target's public API or ask.
 - **Errors are plain classes until the edge.** Domain/application code throws
   `AppError` subclasses. Only an infrastructure-layer Fastify exception filter converts
   those to HTTP responses. Never `throw new HttpException(...)` from a use case.
@@ -76,6 +81,7 @@ seem to disagree.
 ## When you disagree with CLAUDE.md
 
 Say so, and why, before implementing your own preference. This file encodes real
-architectural decisions (some made after discussion — see §0.1's broker divergence as
-an example of how that discussion gets resolved and recorded). Silently working around
-a rule you find inconvenient defeats the point of having governance at all.
+architectural decisions (some made after discussion — see §0.1's BullMQ/Postgres
+reconciliation as an example of how that discussion gets resolved and recorded).
+Silently working around a rule you find inconvenient defeats the point of having
+governance at all.

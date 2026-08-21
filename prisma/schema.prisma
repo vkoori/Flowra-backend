@@ -1,0 +1,21 @@
+// Single Prisma schema for the whole modular monolith. Table ownership per module is
+// tracked by comment, not by physical file split (see CLAUDE.md/AGENTS.md §2.2 — no
+// cross-module SQL joins; ownership here is what "which module's tables" means).
+// pgvector (docs/social-assistant-design-v2.md §2, decision #8) is enabled once the
+// assistant module needs it — not turned on speculatively here.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+// Prisma 7: the connection URL is no longer set here. The CLI reads it from
+// prisma.config.ts; the runtime client gets it via a driver adapter
+// (see src/shared/infrastructure/prisma/prisma.service.ts).
+
+// No models yet. Per docs/social-assistant-design-v2.md §12 build order, the first
+// models belong to identity/accounts/channels — added when those modules are
+// scaffolded, not speculatively here.

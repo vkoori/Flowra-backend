@@ -17,16 +17,18 @@ behavior, read the design doc before inventing behavior.
 
 | Concern | Choice | Notes |
 |---|---|---|
-| Runtime | **Node v24.18.0** | Pinned via `.nvmrc` and the `engines` field once `package.json` exists. Do not write scripts (including `.claude/skills/*`) that assume an older Node — the skills in this repo rely only on Node 24-stable APIs (`fs`, `path`, no external deps), so this should never be a constraint in practice, but do not add a dependency that requires a different major. |
+| Runtime | **Node v24.18.0** | Pinned via `.nvmrc` and `package.json`'s `engines` field. Do not write scripts (including `.claude/skills/*`) that assume an older Node — the skills in this repo rely only on Node 24-stable APIs (`fs`, `path`, no external deps), so this should never be a constraint in practice, but do not add a dependency that requires a different major. |
 | Framework | NestJS | **Fastify adapter only.** `@nestjs/platform-express` must never be installed or imported. |
-| Language | TypeScript, strict mode | No `any` except at deserialization boundaries, and even then prefer `unknown` + Zod. |
+| Language | TypeScript, strict mode | No `any` except at deserialization boundaries, and even then prefer `unknown` + Zod. TypeScript is pinned to the 6.x line (`typescript@6.0.3`) — TS7 shipped but `ts-jest` doesn't support it yet; do not bump past 6.x until that changes. |
 | Database | PostgreSQL | Single primary. Source of truth for durable state, including scheduling (see §0.1). |
-| ORM | Prisma | Raw SQL / `prisma.$queryRaw` / TypedSQL permitted where Prisma's query builder is awkward, never to bypass module isolation (§2). |
+| ORM | Prisma 7 | Driver-adapter model, not a `datasource.url` in `schema.prisma` — the CLI reads the connection from `prisma.config.ts`, the runtime client from `@prisma/adapter-pg` in `PrismaService`. Raw SQL / `prisma.$queryRaw` / TypedSQL permitted where Prisma's query builder is awkward, never to bypass module isolation (§2). |
 | Vector search | pgvector inside the same Postgres instance | Do not introduce a second vector store. |
-| Queue / jobs | **BullMQ + Redis** | See §0.1 for how BullMQ composes with Postgres-owned scheduling state. |
+| Queue / jobs | **BullMQ + Redis** | See §0.1 for how BullMQ composes with Postgres-owned scheduling state. A dashboard (`@bull-board/*`, mounted at `/admin/queues`) is wired in `shared/presentation/bullmq/` — unauthenticated by design until an auth module exists; see that file's SECURITY comment before deploying anywhere past local dev. |
 | Cache / rate limiting / locks | Redis | Same instance BullMQ uses; keep key namespaces separate (`rl:*`, `lock:*`, `cache:*`, `bull:*`). |
 | Validation | Zod | At every boundary: HTTP DTOs, webhook payloads, action params, flow graphs, LLM structured output. |
-| Testing | Jest + Supertest (Fastify `inject`) + Testcontainers | See §7. |
+| i18n | `nestjs-i18n` | `src/i18n/<lang>/<namespace>.json`; error codes translate via the `errors.<code>` convention (§4.F.19). Checked by the `validate-i18n` skill — no hardcoded Persian/Arabic literals, every key registered. |
+| API docs | `@nestjs/swagger` + `nestjs-zod`'s `cleanupOpenApiDoc` | Generated from the same Zod DTOs that validate requests (§4.C.9) — no separate schema to keep in sync. Mounted at `/api/docs`, disabled when `NODE_ENV=production` (see `setup-swagger.ts`). |
+| Testing | Jest + Supertest (Fastify `inject`) + Testcontainers | See §7. E2E tests run against a dedicated `flowra_test` database (`docker/postgres-init/`, `.env.test`) — never the dev database. |
 
 ### 0.1 BullMQ is a delivery mechanism, not the source of truth — read before touching `dispatch/` or `automation/`
 
@@ -139,10 +141,12 @@ No module may import another module's repository implementation, Prisma models, 
 or internal services directly. **The only two legal ways to cross a module boundary are:**
 
 1. Importing the target module's **public API barrel** — `src/modules/<name>/index.ts` —
-   which re-exports only the interfaces/DTOs the module owner intends for external use
-   (typically an application-layer service interface + its DTOs). Nothing under
-   `domain/`, `infrastructure/`, or `application/use-cases/` is reachable from outside the
-   module except through that barrel.
+   which re-exports only the application-layer service interface(s) and plain
+   input/output types the module owner intends for external use. Never a
+   `presentation/dto/` type — those are this module's own HTTP boundary shape, not a
+   cross-module contract. Nothing under `domain/`, `application/use-cases/`,
+   `presentation/`, or `infrastructure/` is reachable from outside the module except
+   through that barrel.
 2. **Domain events.** A module publishes an event; another module's use case subscribes.
    No caller-callee coupling, no shared transaction.
 
@@ -161,13 +165,46 @@ from two modules, either:
 
 ### 2.3 `shared/` is not a garbage drawer
 
-`shared/` holds true cross-cutting, business-logic-free concerns: `shared/domain/money`,
-`shared/crypto`, `shared/text-normalisation`, `shared/idempotency`, `shared/scoping`,
-`shared/errors` (the `AppError` hierarchy), `shared/clock`. It must never contain a
-`UserService`, an `OrderHelper`, or anything that encodes a business rule belonging to a
-specific bounded context. If two modules need the same *business* concept, that is a sign
-one of them should own it and expose it through its public API — not a sign it belongs in
-`shared/`.
+`shared/` holds true cross-cutting, business-logic-free concerns, laid out with the same
+`domain → application → {presentation, infrastructure}` direction as a real module (§3),
+just without any bounded context of its own:
+
+```
+shared/
+├── domain/                    # pure, framework-free — zero imports of @nestjs/*, @prisma/client, etc.
+│   ├── money/
+│   ├── errors/                 # the AppError hierarchy + ErrorCode enum
+│   ├── idempotency/             # buildDedupeKey
+│   ├── scoping/                  # ScopeContext, applyScope
+│   └── text-normalisation/        # normalizeText
+├── application/
+│   └── ports/                  # Clock, Encryptor, StorageGateway — interfaces only
+├── infrastructure/
+│   ├── adapters/                # SystemClock, AesGcmEncryptor, S3StorageGateway — implement a port above
+│   ├── prisma/                   # PrismaService — no port; nothing to swap it for
+│   └── bullmq/                    # queue connection wiring — same reason
+├── presentation/
+│   ├── filters/                 # AppExceptionFilter
+│   ├── http/                     # response envelope, response interceptor
+│   ├── swagger/                   # setupSwagger
+│   └── bullmq/                     # Bull Board admin UI wiring
+├── clock.module.ts
+├── crypto.module.ts
+└── media.module.ts
+```
+
+A concern lands in `application/ports/` + `infrastructure/adapters/` (Golden Rules 10/11)
+only when it has something genuinely swappable behind an interface — an external API, the
+system clock, encryption. `prisma/` and `bullmq/` stay flat under `infrastructure/` because
+there is no port to extract: nothing else could stand in for `PrismaService` or the BullMQ
+connection, so splitting them into a "port" would just be indirection with no second
+implementation to justify it. Everything else that's a pure function or pure type
+(`money`, `errors`, `idempotency`, `scoping`, `text-normalisation`) goes in `domain/`.
+
+`shared/` must never contain a `UserService`, an `OrderHelper`, or anything that encodes a
+business rule belonging to a specific bounded context. If two modules need the same
+*business* concept, that is a sign one of them should own it and expose it through its
+public API — not a sign it belongs in `shared/`.
 
 ---
 
@@ -181,25 +218,65 @@ src/modules/<module-name>/
 │   ├── errors/               # Pure domain errors, extend Error, no HTTP knowledge
 │   └── repositories/         # Interfaces only, e.g. user.repository.ts
 ├── application/
-│   ├── use-cases/            # *.use-case.ts — one class, one job
-│   ├── dto/                  # class-validator DTOs for transport
+│   ├── use-cases/            # *.use-case.ts — one class, one job, takes plain arguments
 │   ├── ports/                # Gateway/port interfaces (*.gateway.ts) for external systems
 │   └── events/                # Domain event definitions + handlers that orchestrate use cases
+├── presentation/               # every interface adapter this module has — not just HTTP
+│   ├── http/                   # present from day one — every module starts with a controller
+│   │   ├── controllers/        # Fastify/Nest controllers — transport only, *.controller.ts
+│   │   ├── dto/                 # Zod-validated request/response DTOs, *.dto.ts
+│   │   └── mappers/              # *.mapper.ts — HTTP DTO ↔ use-case input/output (e.g. CreateUserHttpMapper)
+│   ├── queue/                   # added only once this module consumes a BullMQ queue
+│   │   ├── consumers/           # *.consumer.ts — translates a job into a use-case call
+│   │   ├── dto/                  # Zod-validated message payload shapes, *.dto.ts
+│   │   └── mappers/               # *.mapper.ts — queue message ↔ use-case input/output
+│   └── scheduler/                # added only once this module has a cron-driven action
+│       └── *.job.ts               # flat, no subfolder — e.g. expire-unpaid-orders.job.ts
 ├── infrastructure/
-│   ├── controllers/          # Fastify/Nest controllers — transport only
 │   ├── persistence/           # prisma-*.repository.ts + Prisma-specific query logic
-│   ├── mappers/               # *.mapper.ts — toDomain()/toPersistence()
+│   ├── mappers/               # *.mapper.ts — DB model ↔ domain entity, and external API ↔ domain/application
 │   └── adapters/              # Concrete gateway implementations (*.gateway.ts impls)
 ├── <module-name>.module.ts    # NestJS DI wiring — providers keyed by Symbol tokens
 ├── index.ts                   # Public API barrel — the ONLY legal cross-module import surface
 └── README.md                  # Module doc: owned tables, public API, published/consumed events
 ```
 
-**Dependency direction:** `infrastructure → application → domain`. The `domain/` folder
-must have zero imports of `@nestjs/*`, `@prisma/client`, `axios`, `fastify`, or anything
-under `infrastructure/`. It must be importable and testable in plain Node with no
-framework running. `validate-architecture.js` enforces this; do not weaken it to "make a
-ticket go faster."
+**"Presentation" is not just HTTP.** It means *any* interface adapter — anything that
+receives an external trigger and translates it into a use-case call. `presentation/http/`
+is the only one `scaffold-clean-module` generates by default, since every module starts
+with at least one controller; add `presentation/queue/` or `presentation/scheduler/` by
+hand, with the exact shape above, once a module actually gains a queue consumer or a
+scheduled job — not speculatively.
+
+**A mapper belongs to whichever layer is doing the translating, not to one shared
+"mappers" folder.** `HTTP Request → use-case input` and `use-case output → HTTP
+Response` are presentation concerns (`presentation/http/mappers/`); the same for a
+queue message (`presentation/queue/mappers/`). `DB row ↔ domain entity` and
+`external API payload ↔ domain/application` are infrastructure concerns
+(`infrastructure/mappers/`) — that folder never sees a DTO, and `presentation/*/mappers/`
+never sees a Prisma row.
+
+`presentation/` and `infrastructure/` are Clean Architecture's two outer layers —
+"interface adapters" (controllers/consumers/jobs and their request/message DTOs, the
+delivery mechanism) and "frameworks & drivers" (the database, external HTTP clients)
+respectively. Both depend inward on `application`/`domain`; **neither depends on the
+other.** A controller/consumer/job must never import `infrastructure/persistence/`
+directly — it calls a use case, which is what actually depends on the persistence port.
+
+**Request validation lives in `presentation/*/dto/`, not `application/`.** A use case's
+`execute()` takes plain arguments (or a plain interface co-located with the use case
+itself) — never a presentation DTO type. If application imported a presentation DTO,
+dependency direction would invert (`presentation → application` would become mutual).
+The controller/consumer/job is the one place allowed to know about both layers: it
+validates the incoming request/message against a `presentation/*/dto/` schema, then
+passes plain values to the use case.
+
+**Dependency direction:** `presentation → application → domain` and
+`infrastructure → application → domain`. The `domain/` folder must have zero imports of
+`@nestjs/*`, `@prisma/client`, `axios`, `fastify`, or anything under `presentation/` or
+`infrastructure/`. It must be importable and testable in plain Node with no framework
+running. `validate-architecture.js` enforces this; do not weaken it to "make a ticket go
+faster."
 
 The `scaffold-clean-module` skill (§6) generates this exact skeleton, including a starter
 `README.md`, so there is no excuse for a module missing a layer.
@@ -227,10 +304,13 @@ The `scaffold-clean-module` skill (§6) generates this exact skeleton, including
 ### C. Application layer — use cases over services
 7. **Use cases, not god-services.** `CreateUserUseCase`, `CheckoutOrderUseCase` — never a
    `UserService` that accumulates every operation touching a user.
-8. **Controllers are transport only.** Flow: `HTTP Request → DTO → Use Case → Response`.
-   No business logic, no direct repository access, no direct Prisma access in a controller.
-9. **DTOs and entities never mix.** `CreateUserDto` (class-validator, transport shape) is
-   not `User` (domain model). A mapper sits between them.
+8. **Controllers (`presentation/http/controllers/`) are transport only.** Flow:
+   `HTTP Request → DTO → Use Case → Response`. No business logic, no direct repository
+   access, no direct Prisma access in a controller.
+9. **DTOs and entities never mix.** `CreateUserDto` (a Zod schema wrapped via
+   `createZodDto`, living in `presentation/http/dto/`, transport shape) is not `User`
+   (domain model). The controller maps validated DTO fields to plain arguments before
+   calling the use case — never pass a DTO instance into a use case.
 
 ### D. Infrastructure, ports & adapters
 10. **Repository interfaces live in `domain/` or `application/ports/`; implementations
@@ -267,9 +347,15 @@ The `scaffold-clean-module` skill (§6) generates this exact skeleton, including
 
 ### F. Errors, logging, config
 19. **Domain errors vs HTTP exceptions.** Domain throws plain `Error` subclasses with a
-    stable `code` (e.g. `class InsufficientBalanceError extends AppError`). A single
-    Fastify exception filter maps `AppError` → HTTP status. Domain code never imports
-    `HttpException`.
+    stable `code: ErrorCode` (e.g. `class InsufficientBalanceError extends AppError`),
+    where `ErrorCode` (`shared/errors/error-code.enum.ts`) is the single, app-wide enum
+    every module adds its own codes to — codes must be globally unique since they also
+    double as the i18n key suffix, so a shared enum makes that a compile-time property
+    instead of a convention someone can forget. A single Fastify exception filter maps
+    `AppError` → HTTP status. Domain code never imports `HttpException` — or
+    `nestjs-i18n`. The filter translates `code` into a localized message via
+    `errors.<code>` in `src/i18n/<lang>/errors.json`; domain produces the code, the
+    filter (presentation's edge) is the only place it becomes user-facing text.
 20. **Logging.** Separate business logs (`INFO Order created`) from infra logs
     (`WARN API timeout`). Never log PII, tokens, message bodies, or passwords — a pino
     serializer must redact these (design doc §6.12: the log pipeline is the most common
@@ -294,7 +380,13 @@ The `scaffold-clean-module` skill (§6) generates this exact skeleton, including
 
 ### H. NestJS specifics
 24. **Clean code.** No redundant comments explaining what the code already says. Code is
-    self-documenting through naming; comments justify non-obvious *why*, never *what*.
+    self-documenting through naming; only comment where you really have to — a hidden
+    invariant, a workaround for a specific bug, something that would surprise a reader
+    at that exact line. When the explanation is an infrastructure or architectural
+    choice rather than a local invariant, it belongs in
+    [`docs/backend-infrastructure-notes.md`](docs/backend-infrastructure-notes.md), not
+    inline — that file is organized by source path specifically so the rationale stays
+    findable without bloating the code that implements it.
 25. **Singleton scope by default.** Do not use `Scope.REQUEST` — it defeats DI caching and
     is a standing memory/performance liability under load. If you believe you need
     request-scoped state, that's a signal to pass the value explicitly instead.
@@ -355,16 +447,23 @@ reinvent these — read the linked section before writing code that touches them
 - **Commands** (`.claude/commands/`) — `/scaffold-module`, `/new-usecase`, `/new-adapter`,
   `/add-domain-event`, `/architecture-audit`. Prefer these over hand-rolling boilerplate;
   they exist specifically so every module starts from the same skeleton.
-- **Skills** (`.claude/skills/`) — `validate-architecture` (import-boundary static
-  analysis), `scaffold-clean-module` (folder generator), `lint-leaks` (unhandled-promise /
-  `Scope.REQUEST` sweep). Run `validate-architecture` after any change that adds or moves
-  an import across a module or layer boundary — don't wait for CI to tell you.
+- **Skills** (`.claude/skills/`) — `validate-architecture` (AST-based import-boundary
+  and layer-structure check), `validate-i18n` (hardcoded Persian/Arabic text + i18n key
+  registration), `scaffold-clean-module` (folder generator), `lint-leaks`
+  (unhandled-promise / `Scope.REQUEST` sweep). Run `validate-architecture` after any
+  change that adds or moves an import across a module or layer boundary — don't wait
+  for CI to tell you.
 - **Agents** (`.claude/agents/`) — `nestjs-clean-architect` (primary implementation
   agent for this codebase), `architecture-guardian` (read-only review against this file),
   `reliability-outbox-specialist` (deep focus on §0.1/§4.E for `dispatch/`, `automation/`,
   `ingestion/`, `flows/` work).
 - **MCP / plugins** (`.claude/plugins/`) — see `mcp-servers.json` for the recommended
   Postgres/Prisma introspection servers and how to enable them.
+- **Pre-commit** (`husky` + `lint-staged`) — staged `.ts` files get `prettier --write` +
+  `eslint --fix --max-warnings=0`; every commit additionally runs
+  `validate-architecture`, `validate-i18n`, and `lint-leaks` in `--strict` mode (heuristics
+  block the commit too, not just hard violations) plus a full `build` and `test`. Run
+  `npm run check` to run the same whole-repo suite manually before pushing.
 
 ## 7. What this file does not cover
 

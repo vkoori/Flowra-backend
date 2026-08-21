@@ -15,12 +15,17 @@ by `CLAUDE.md`/`AGENTS.md` §3 for a new module under `src/modules/`:
 ```
 src/modules/<module-name>/
 ├── domain/{entities,value-objects,errors,repositories}/
-├── application/{use-cases,dto,ports,events}/
-├── infrastructure/{controllers,persistence,mappers,adapters}/
+├── application/{use-cases,ports,events}/
+├── presentation/http/{controllers,dto,mappers}/
+├── infrastructure/{persistence,mappers,adapters}/
 ├── <module-name>.module.ts
 ├── index.ts
 └── README.md
 ```
+
+Only `presentation/http/` is generated. `presentation/queue/{consumers,dto,mappers}/`
+and `presentation/scheduler/` (flat, `*.job.ts`) are added by hand later, only once a
+module actually gains a BullMQ consumer or a cron job — see `CLAUDE.md`/`AGENTS.md` §3.
 
 Empty directories get a `.gitkeep` so the skeleton is committable before any real file
 exists in them. `<module-name>.module.ts` and `index.ts` are minimal, compiling stubs —

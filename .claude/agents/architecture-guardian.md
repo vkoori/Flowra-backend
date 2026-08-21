@@ -39,10 +39,9 @@ mutates the working tree or history — that is out of scope for this role even 
      (webhook handler, payment call, external send) lack a dedupe/idempotency mechanism?
    - **Cross-module SQL joins** (§2.2): does a Prisma query or raw SQL join tables owned
      by two different modules per their `README.md` "Owned tables" sections?
-   - **BullMQ/outbox divergence compliance** (§0.1): for anything in `dispatch/`,
-     `automation/`, `ingestion/`, `flows/` — is Postgres still the authority for
-     status/attempts, are job IDs deterministic, does a stale job no-op against a
-     cancelled execution row?
+   - **BullMQ/outbox compliance** (§0.1): for anything in `dispatch/`, `automation/`,
+     `ingestion/`, `flows/` — is Postgres still the authority for status/attempts, are
+     job IDs deterministic, does a stale job no-op against a cancelled execution row?
 
 ## Output format
 

@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "flowra",
+      "credentials": [
+        {
+          "accessKey": "guest",
+          "secretKey": "guest"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write"]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+lint-staged
+
+npm run architecture:check -- --strict
+npm run i18n:check -- --strict
+npm run leaks:check -- --strict
+npm run build
+npm run test

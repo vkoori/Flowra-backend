@@ -9,9 +9,9 @@ repo root. Read it if it is not already in context — it is binding, not adviso
 
 Before writing anything:
 1. Identify which module (AGENTS.md §2) and which layer (domain / application /
-   infrastructure, §3) the change belongs to. If it doesn't obviously belong to an
-   existing module, stop and ask rather than inventing a new one or bolting it onto
-   shared/.
+   presentation / infrastructure, §3) the change belongs to. If it doesn't obviously
+   belong to an existing module, stop and ask rather than inventing a new one or
+   bolting it onto shared/.
 2. If the task touches product behavior (ownership, execution states, the rule/flow
    engine, moderation, retention), check docs/social-assistant-design-v2.md first. Do
    not invent business rules the document already answers.
@@ -27,9 +27,13 @@ While writing:
 - Use cases, not services: one class, one job, named after the action.
 - Ports before adapters: any call to Prisma, an HTTP API, the clock, or Redis goes
   through an interface, implemented in infrastructure/, wired with a Symbol DI token.
+- Request validation is a presentation concern: DTOs (Zod via createZodDto) live in
+  presentation/http/dto/ (or presentation/queue/dto/ for a BullMQ consumer), never in
+  application/. A use case's execute() takes plain arguments — never a DTO instance.
 - Module isolation is not optional: never import another module's domain/,
-  application/use-cases/, or infrastructure/ directly. Either its index.ts barrel has
-  what you need, it needs to export it, or this needs a domain event instead.
+  application/use-cases/, presentation/, or infrastructure/ directly. Either its
+  index.ts barrel has what you need, it needs to export it, or this needs a domain
+  event instead.
 - Errors are plain classes until the edge: only an infrastructure-layer Fastify
   exception filter converts AppError subclasses to HTTP responses.
 - Every async boundary resolves or rejects — no floating .then(), no un-awaited async

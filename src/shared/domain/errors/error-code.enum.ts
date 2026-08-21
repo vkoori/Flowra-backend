@@ -1,0 +1,4 @@
+export enum ErrorCode {
+  INTERNAL_ERROR = 'INTERNAL_ERROR',
+  HTTP_EXCEPTION = 'HTTP_EXCEPTION',
+}
