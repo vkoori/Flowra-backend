@@ -3,9 +3,9 @@ name: lint-leaks
 description: Sweep for unhandled-promise patterns and Scope.REQUEST usage — the two NestJS/Fastify footguns CLAUDE.md/AGENTS.md §4.H.25-26 calls out as process-crashing or memory-leaking. Use before finishing any task that adds async code, event/job handlers, or provider scope decorators.
 ---
 
-> Mirrored verbatim at `.agents/skills/lint-leaks/` for Codex CLI discovery. The two
-> copies must stay byte-identical — edit one, then copy it over the other in the same
-> turn.
+> Mirrored at `.agents/skills/lint-leaks/` for Codex CLI discovery. Keep the skill's
+> behavior and executable implementation aligned across both copies; invocation paths
+> are tool-specific.
 
 # lint-leaks
 

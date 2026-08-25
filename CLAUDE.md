@@ -11,6 +11,14 @@ machine, flow engine, journeys). This file describes *how* code must be structur
 which engineering invariants may never be violated. When in doubt about product
 behavior, read the design doc before inventing behavior.
 
+Accepted delivery scenarios live in [`docs/tasks-pm/`](docs/tasks-pm/). When a story ID
+exists there, that accepted PM story supersedes the matching file in `docs/tasks/` and
+the older `docs/tasks/README.md`. Files in `docs/tasks/` remain historical or draft
+context; a story without an accepted `docs/tasks-pm/` rewrite is not automatically an
+approved specification. If an older story leaves a product choice unresolved, or an
+accepted story appears to conflict with the design doc, stop and ask rather than choosing
+an interpretation.
+
 ---
 
 ## 0. Stack
@@ -28,7 +36,7 @@ behavior, read the design doc before inventing behavior.
 | Validation | Zod | At every boundary: HTTP DTOs, webhook payloads, action params, flow graphs, LLM structured output. |
 | i18n | `nestjs-i18n` | `src/i18n/<lang>/<namespace>.json`; error codes translate via the `errors.<code>` convention (§4.F.19). Checked by the `validate-i18n` skill — no hardcoded Persian/Arabic literals, every key registered. |
 | API docs | `@nestjs/swagger` + `nestjs-zod`'s `cleanupOpenApiDoc` | Generated from the same Zod DTOs that validate requests (§4.C.9) — no separate schema to keep in sync. Mounted at `/api/docs`, disabled when `NODE_ENV=production` (see `setup-swagger.ts`). |
-| Testing | Jest + Supertest (Fastify `inject`) + Testcontainers | See §7. E2E tests run against a dedicated `flowra_test` database (`docker/postgres-init/`, `.env.test`) — never the dev database. |
+| Testing | Jest + Supertest (Fastify `inject`) + Testcontainers | See §4.G. E2E tests run against a dedicated `flowra_test` database (`docker/postgres-init/`, `.env.test`) — never the dev database. |
 
 ### 0.1 BullMQ is a delivery mechanism, not the source of truth — read before touching `dispatch/` or `automation/`
 
@@ -53,7 +61,7 @@ Concretely:
    cancellation mechanism — jobs already in flight or in Redis but not yet consumed
    must still be safe to no-op.
 4. **BullMQ retry ≠ blind retry.** Configure `attempts`/`backoff` on the job, but the
-   processor MUST classify the error first (§5.17) and throw an `UnrecoverableError`
+   processor MUST classify the error first (§4.E.17) and throw an `UnrecoverableError`
    (BullMQ's own class) for 400/401-class failures so BullMQ does not keep retrying
    something that can never succeed. Update the execution row's `dead_letter_reason` on
    terminal failure — a dead-lettered execution must be product-visible (design doc §9.9).

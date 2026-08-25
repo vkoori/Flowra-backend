@@ -13,9 +13,12 @@ seem to disagree.
 ## Before writing anything
 
 1. Identify which module (`CLAUDE.md` §2) and which layer (`domain` / `application` /
-   `presentation` / `infrastructure`, §3) the change belongs to. If it doesn't
-   obviously belong to an existing module, stop and ask rather than inventing a new one
-   or bolting it onto `shared/`.
+   `presentation` / `infrastructure`, §3) the change belongs to. When the request
+   explicitly creates a new bounded-context module, use the `scaffold-clean-module`
+   skill (`bash .claude/skills/scaffold-clean-module/scaffold-clean-module.sh
+   <module-name>`) instead of hand-creating its structure. If the change does not
+   obviously belong to an existing module and no new module was explicitly requested,
+   stop and ask rather than inventing one or bolting it onto `shared/`.
 2. If the task touches product behavior (ownership, execution states, the rule/flow
    engine, moderation, retention), check `docs/social-assistant-design-v2.md` first.
    Do not invent business rules that document already answers.
@@ -53,7 +56,7 @@ seem to disagree.
   this needs a domain event instead. If you find yourself about to write a deep
   cross-module import, stop and either extend the target's public API or ask.
 - **Errors are plain classes until the edge.** Domain/application code throws
-  `AppError` subclasses. Only an infrastructure-layer Fastify exception filter converts
+  `AppError` subclasses. Only a presentation-layer Fastify exception filter converts
   those to HTTP responses. Never `throw new HttpException(...)` from a use case.
 - **Every async boundary resolves or rejects.** Controller handlers, BullMQ processors,
   event handlers: no floating `.then()`, no un-awaited async call left dangling. Fastify
@@ -70,11 +73,15 @@ seem to disagree.
    contract the whole architecture depends on.
 2. Run the `lint-leaks` skill (`bash .claude/skills/lint-leaks/lint-leaks.sh`) and look
    at anything it flags, even though it's advisory.
-3. If you added a use case, controller, or repository: is there a corresponding test at
+3. If you added or edited user-facing text, or touched `src/i18n/`, run the
+   `validate-i18n` skill
+   (`node .claude/skills/validate-i18n/validate-i18n.js`) and fix every hard violation
+   it reports.
+4. If you added a use case, controller, or repository: is there a corresponding test at
    the right tier (`CLAUDE.md` §4.G)? Domain/application tests mock ports; they never
    mock a pure function; infrastructure tests hit real Postgres/Redis via
    Testcontainers when one is available.
-4. If you touched a module's public surface or added a domain event, update that
+5. If you touched a module's public surface or added a domain event, update that
    module's `README.md` (public API / published events / consumed events sections) —
    a cross-module contract that only lives in code is not documented.
 

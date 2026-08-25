@@ -3,9 +3,9 @@ name: lint-leaks
 description: Sweep for unhandled-promise patterns and Scope.REQUEST usage — the two NestJS/Fastify footguns CLAUDE.md/AGENTS.md §4.H.25-26 calls out as process-crashing or memory-leaking. Use before finishing any task that adds async code, event/job handlers, or provider scope decorators.
 ---
 
-> Mirrored verbatim at `.claude/skills/lint-leaks/` for Claude Code discovery. The two
-> copies must stay byte-identical — edit one, then copy it over the other in the same
-> turn.
+> Mirrored at `.claude/skills/lint-leaks/` for Claude Code discovery. Keep the skill's
+> behavior and executable implementation aligned across both copies; invocation paths
+> are tool-specific.
 
 # lint-leaks
 
@@ -29,9 +29,9 @@ Runs `lint-leaks.sh`, which does two things:
 ## How to invoke
 
 ```bash
-bash .claude/skills/lint-leaks/lint-leaks.sh
-bash .claude/skills/lint-leaks/lint-leaks.sh --quiet    # used by the Stop hook
-bash .claude/skills/lint-leaks/lint-leaks.sh --strict   # exit 1 if any heuristic hit fires
+bash .agents/skills/lint-leaks/lint-leaks.sh
+bash .agents/skills/lint-leaks/lint-leaks.sh --quiet
+bash .agents/skills/lint-leaks/lint-leaks.sh --strict   # exit 1 if any heuristic hit fires
 ```
 
 Without `--strict` this is advisory (exit 0 always) because the grep heuristics are not

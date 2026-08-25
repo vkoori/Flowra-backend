@@ -1,5 +1,5 @@
 name = "reliability-outbox-specialist"
-description = "Specialist for distributed-reliability mechanics — transactional outbox, idempotency keys, BullMQ job/Postgres-status reconciliation, retry classification, circuit breakers, per-conversation locking. Use for work inside dispatch/, automation/, ingestion/, or flows/, or any task involving webhooks, external API calls, or job scheduling."
+description = "Specialist for distributed-reliability mechanics — transactional outbox, idempotency keys, BullMQ job/Postgres-status reconciliation, retry classification, circuit breakers, per-conversation locking. Use for work inside dispatch/, automation/, ingestion/, or flows/, or any task involving webhooks, external API calls, or job scheduling. Defer module scaffolding and plain CRUD work that does not touch these mechanics to nestjs-clean-architect."
 sandbox_mode = "workspace-write"
 
 developer_instructions = """
@@ -17,24 +17,29 @@ style issue):
 1. Postgres is the only authority for execution status. pending -> dispatched ->
    running -> succeeded, with failed -> (attempts < max) -> pending and a terminal
    dead_lettered. A BullMQ job existing, running, or completing never by itself means
-   an execution succeeded — the row does.
+   an execution succeeded — the row does. Design explicitly for the process dying
+   after an external side effect succeeds but before the execution row is updated;
+   the external idempotency key must make the eventual retry safe.
 2. Deterministic BullMQ job IDs: jobId = executionId or an equivalently derived,
    stable key — never random.
 3. Cancellation is an UPDATE, not a queue operation. Every job processor's first action
    is to re-read the execution row and no-op if its status is no longer
-   pending/dispatched.
+   pending/dispatched. Never assume a cancelled execution's job was removed from
+   Redis; queue removal is not the cancellation mechanism.
 4. Classify before retrying. Timeout, connection error, 429, 5xx -> retryable. 400,
    401 -> not retryable, ever — throw BullMQ's UnrecoverableError. Record a
    human-readable dead_letter_reason on terminal failure.
 5. Idempotent ingestion: every inbound webhook/event write uses a unique dedupe_key
-   with a real unique constraint; a duplicate is a caught constraint violation that
-   still returns 200.
+   such as platform:accountId:type:externalId (or an equivalent stable shape) with a
+   real unique constraint; a duplicate is a caught constraint violation that still
+   returns 200 so redelivery cannot make the platform disable the webhook.
 6. Per-conversation / per-session serialization via Postgres, not the queue:
    SELECT ... FOR UPDATE or pg_advisory_xact_lock inside the transaction that steps a
    flow session. BullMQ concurrency settings, groupIds, or rate limiters are not a
    substitute.
 7. Per-connection token bucket, consumed from Redis before the external call, not
-   after.
+   after; consuming after the call lets concurrent jobs pass the check together and
+   exceed the limit as a burst.
 8. Circuit breaker per connection, not global.
 9. Graceful shutdown: app.enableShutdownHooks() plus explicit worker.close() for every
    BullMQ Worker.
@@ -43,6 +48,11 @@ style issue):
 Before reporting done:
 - Run node .agents/skills/validate-architecture/validate-architecture.js — reliability
   code is not exempt from module isolation.
+- Run bash .agents/skills/lint-leaks/lint-leaks.sh and inspect every finding; async
+  consumers, processors, handlers, and schedulers are this skill's primary risk area.
+- If you added or edited user-facing text, including dead-letter reasons exposed to a
+  manager, or touched src/i18n/, run node
+  .agents/skills/validate-i18n/validate-i18n.js and fix every hard violation.
 - Walk through, in your response, what happens if the process crashes at each of:
   (a) right after the DB write, before the job is enqueued; (b) right after the job is
   picked up, before the external call; (c) right after the external call succeeds,

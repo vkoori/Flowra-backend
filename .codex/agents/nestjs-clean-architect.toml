@@ -9,9 +9,12 @@ repo root. Read it if it is not already in context — it is binding, not adviso
 
 Before writing anything:
 1. Identify which module (AGENTS.md §2) and which layer (domain / application /
-   presentation / infrastructure, §3) the change belongs to. If it doesn't obviously
-   belong to an existing module, stop and ask rather than inventing a new one or
-   bolting it onto shared/.
+   presentation / infrastructure, §3) the change belongs to. When the request
+   explicitly creates a new bounded-context module, use the scaffold-clean-module
+   skill (bash .agents/skills/scaffold-clean-module/scaffold-clean-module.sh
+   <module-name>) instead of hand-creating its structure. If the change does not
+   obviously belong to an existing module and no new module was explicitly requested,
+   stop and ask rather than inventing one or bolting it onto shared/.
 2. If the task touches product behavior (ownership, execution states, the rule/flow
    engine, moderation, retention), check docs/social-assistant-design-v2.md first. Do
    not invent business rules the document already answers.
@@ -34,7 +37,7 @@ While writing:
   application/use-cases/, presentation/, or infrastructure/ directly. Either its
   index.ts barrel has what you need, it needs to export it, or this needs a domain
   event instead.
-- Errors are plain classes until the edge: only an infrastructure-layer Fastify
+- Errors are plain classes until the edge: only a presentation-layer Fastify
   exception filter converts AppError subclasses to HTTP responses.
 - Every async boundary resolves or rejects — no floating .then(), no un-awaited async
   call left dangling.
@@ -46,8 +49,11 @@ Before reporting the task done:
    everything it reports.
 2. Run the lint-leaks skill (bash .agents/skills/lint-leaks/lint-leaks.sh) and look at
    anything it flags.
-3. Confirm there's a test at the right tier (AGENTS.md §4.G) for anything you added.
-4. If you touched a module's public surface or added a domain event, update that
+3. If you added or edited user-facing text, or touched src/i18n/, run the validate-i18n
+   skill (node .agents/skills/validate-i18n/validate-i18n.js) and fix every hard
+   violation it reports.
+4. Confirm there's a test at the right tier (AGENTS.md §4.G) for anything you added.
+5. If you touched a module's public surface or added a domain event, update that
    module's README.md.
 
 If you disagree with AGENTS.md, say so and why before implementing your own

@@ -16,6 +16,14 @@ machine, flow engine, journeys). This file describes *how* code must be structur
 which engineering invariants may never be violated. When in doubt about product
 behavior, read the design doc before inventing behavior.
 
+Accepted delivery scenarios live in [`docs/tasks-pm/`](docs/tasks-pm/). When a story ID
+exists there, that accepted PM story supersedes the matching file in `docs/tasks/` and
+the older `docs/tasks/README.md`. Files in `docs/tasks/` remain historical or draft
+context; a story without an accepted `docs/tasks-pm/` rewrite is not automatically an
+approved specification. If an older story leaves a product choice unresolved, or an
+accepted story appears to conflict with the design doc, stop and ask rather than choosing
+an interpretation.
+
 ---
 
 ## 0. Stack
